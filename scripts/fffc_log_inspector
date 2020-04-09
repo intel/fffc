@@ -1,0 +1,47 @@
+#! /usr/bin/env python3
+
+# Copyright (C) 2020 Intel Corporation
+# SPDX-License-Identifier: MIT
+
+import struct
+import sys
+
+from collections import namedtuple
+
+raw_log_event = namedtuple("FFFC_log_event", "version event_type location length value")
+
+class FFFC_log_event(raw_log_event):
+
+	struct_object = struct.Struct("QQQQ16s")
+
+	@classmethod
+	def from_binary(cls, data, new=tuple.__new__, len=len):
+		iterable = cls.struct_object.unpack(data)
+		result = new(cls, iterable)
+		return result
+
+	@classmethod
+	def get_size(cls):
+		return cls.struct_object.size
+
+	@classmethod
+	def read_from_file(cls, f):
+		raw_entry = f.read(cls.get_size())
+		if (len(raw_entry) < cls.get_size()):
+			return None
+		return cls.from_binary(raw_entry)
+
+
+def run(filename):
+	with open(filename, 'rb') as f:
+		event = FFFC_log_event.read_from_file(f)
+		while event:
+			#if event.event_type > 3:
+			print(event)
+			event = FFFC_log_event.read_from_file(f)
+
+if __name__ == "__main__":
+	for fname in sys.argv[1:]:
+		print("Analyzing", fname, "...")
+		run(fname)
+		print()

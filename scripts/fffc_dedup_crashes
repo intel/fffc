@@ -1,0 +1,54 @@
+#! /usr/bin/env python3
+
+# Copyright (C) 2020 Intel Corporation
+# SPDX-License-Identifier: MIT
+
+import glob
+import shutil
+import sys
+import os.path
+
+
+def shallow_dedup_id(crash):
+	lines = crash.splitlines()
+	for line in lines:
+		if line.startswith("DEDUP_TOKEN:"):
+			return line
+
+
+def deep_dedup_id(crash):
+	return crash
+
+
+DEDUP_FN = deep_dedup_id
+
+
+def dedup_crashes(dir):
+	crashes = {}
+	path = os.path.sep.join([dir, "crash.*", "crash.*"])
+	crash_paths = glob.iglob(path)
+	for crash_path in crash_paths:
+		with open(crash_path) as crash_file:
+			crash = crash_file.read()
+			dedup_id = DEDUP_FN(crash)
+			crashes[dedup_id] = os.path.split(crash_path)[0]
+	return crashes.values()
+
+
+def delete_duplicates(dir, deduped):
+	path = os.path.sep.join([dir, "crash.*"])
+	crashes = set(glob.iglob(path))
+	uniques = set(deduped)
+	for dup in (crashes - uniques):
+		shutil.rmtree(dup)
+
+
+def dedup_dir(dir):
+	unique_crashes = dedup_crashes(dir)
+	delete_duplicates(dir, unique_crashes)
+
+
+if __name__ == "__main__":
+	if (len(sys.argv) > 1) and (sys.argv[1] == "--shallow"):
+		DEDUP_FN = shallow_dedup_id
+	dedup_dir(".")
