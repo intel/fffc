@@ -15,7 +15,7 @@ int fffc_mutator_for_target_type(__TARGET_TYPE__ storage) {
 	}
 	if (member_size != 1) {
 		fffc_mutator_for_underlying_type(data);
-	} else if (*(unsigned char*)data != 0) {
+	} else if (data && (*(unsigned char*)data != 0)) {
 		fffc_mutator_for_underlying_type(data);	
 	}
 
