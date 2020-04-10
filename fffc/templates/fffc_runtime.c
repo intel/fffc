@@ -1667,6 +1667,9 @@ int fffc_setup_mutation_state(char *target_name) {
 	strcat(FFFC_MUTATION_STATE.crash_path, CRASH_STATE_SUFFIX);
 	__sanitizer_set_report_path(FFFC_MUTATION_STATE.crash_path);
 
+	// Seed the rng
+	srand(iter);
+
 	// Redirect stdout
 	if (!fffc_debug()) {
 		char stdout_path[FFFC_MAX_PATH_LENGTH];
