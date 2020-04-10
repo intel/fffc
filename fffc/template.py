@@ -940,10 +940,12 @@ class RunnerTemplate:
 
     template_name = "fffc_runner.c"
 
-    def __init__(self, func, name, inferred_header_include, pie):
+    def __init__(self, func, name, binary_path, executable_path, inferred_header_include, pie):
         self.generator = CGenerator()
         self.func = func
         self.name = name
+        self.binary_path = binary_path
+        self.exe_path = executable_path
         self.pie = pie
         self.template_path = self._get_template_path()
         self.template_data = pkgutil.get_data("fffc", str(self.template_path))
@@ -1071,6 +1073,20 @@ class RunnerTemplate:
         raw = raw.replace(placeholder, bytes("\n".join(mutators), "utf-8"))
         self.template_data = raw
 
+    def replace_binary_path(self):
+        bin_path = str(self.binary_path)
+        exe_path = str(self.exe_path)
+        if (bin_path == exe_path):
+            # This deals with the weirdness of dl_iterate_phdr, which notates
+            # the main executable as an empty string
+            target_path = ""
+        else:
+            target_path = bin_path
+        raw = self.template_data
+        placeholder = b"___FFFC_BINARY_PATH__"
+        raw = raw.replace(placeholder, bytes(target_path, "utf-8"))
+        self.template_data = raw
+
     def _get_template_path(self):
         return str(Path("templates") / self.template_name)
 
@@ -1088,4 +1104,5 @@ class RunnerTemplate:
         self.replace_return()
         self.replace_argument_mutators()
         self.replace_offset()
+        self.replace_binary_path()
         return None, str(self.template_data, "utf-8")
