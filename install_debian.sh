@@ -13,7 +13,6 @@ cd ..
 sudo ldconfig
 
 # Install fffc
-cd fffc
 sudo ./setup.py install
 
 # Run some tests

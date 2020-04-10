@@ -947,6 +947,8 @@ class InferredHeader:
         # Don't emit builtin types
         if tname and tname.startswith("__builtin"):
             return
+        if tname and tname.startswith("_GLOBAL__sub_"):
+            return
         self.statements.append(ast)
 
     def generate_header(self):
@@ -1285,7 +1287,7 @@ class Executable:
                 result = subprocess.run(cmd, universal_newlines=True, stdout=subprocess.PIPE)
                 if result.returncode != 0:
                     raise Exception("Unable to run compiler; do you have a working build environment?")
-                libname = result.stdout.strip()
+                libname = os.path.abspath(result.stdout.strip())
                 # this is a problem with old clang installs on debian
                 if libname != tag.needed:
                     libnames.append(libname)
