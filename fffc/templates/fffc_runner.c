@@ -4,6 +4,8 @@ ___FFFC_INFERRED_HEADER___
 
 
 static char FFFC_target_name[] = "___FFFC_TARGET_NAME___";
+static char FFFC_target_binary[] = "___FFFC_BINARY_PATH__";
+
 static int FFFC_WORKER_NUMBER = 0;
 
 ___FFFC_TARGET_DECL___
@@ -119,6 +121,6 @@ void hook() {
 		fffc_print_red("Couldn't setup global state");
 		fffc_exit();
 	}
-	FFFC_target = fffc_get_pointer_to_symbol(___FFFC_OFFSET__, ___FFFC_RECALCULATE_OFFSET___);
+	FFFC_target = fffc_get_pointer_to_symbol(___FFFC_OFFSET__, FFFC_target_binary, ___FFFC_RECALCULATE_OFFSET___);
 	fffc_setup_interceptor((void*)FFFC_target, (void*)FFFC_parallel_replacement);
 }

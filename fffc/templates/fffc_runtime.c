@@ -4,11 +4,13 @@
 #define _GNU_SOURCE
 
 #include <dirent.h>
+#include <dlfcn.h>
 #include <errno.h>
 #include <execinfo.h>
 #include <float.h>
 #include <fcntl.h>
 #include <ftw.h>
+#include <link.h>
 #include <math.h>
 #include <time.h>
 #include <stdlib.h>
@@ -767,14 +769,48 @@ void fffc_setup_interceptor(void *target, void *replacement) {
     }
 }
 
-void* fffc_get_pointer_to_symbol(long long unsigned elf_offset, int recaculate) {
-	if (recaculate) {
-		unsigned long phdr = getauxval(AT_PHDR); // The start of the program header
-		phdr += elf_offset; // Add the offset for the symbol
-		phdr -= 0x40; // Subtract the size of the ELF header
-		return (void*) phdr; // And go home.
+static struct {
+	char *path;
+	long long unsigned int addr;
+} fffc_dl_iter_additional_data;
+
+static
+int fffc_dl_iter_callback(struct dl_phdr_info *info, size_t size, void *data) {
+	// Check for the case where all paths are already absolute
+	if (strcmp(fffc_dl_iter_additional_data.path, info->dlpi_name) == 0) {
+		fffc_dl_iter_additional_data.addr = info->dlpi_addr;
+		return -1;
 	}
-	return (void*) elf_offset;
+
+	// Check for the case where they aren't
+	char *real_dlpi_name = realpath(info->dlpi_name, NULL);
+	if (real_dlpi_name && (strcmp(fffc_dl_iter_additional_data.path, real_dlpi_name) == 0)) {
+		fffc_dl_iter_additional_data.addr = info->dlpi_addr;
+		free(real_dlpi_name);
+		return -1;
+	}
+	free(real_dlpi_name);
+
+	// Didn't find it, keep going
+	return 0;
+}
+
+void* fffc_get_pointer_to_symbol(long long unsigned int elf_offset, char *path, int recalculate) {
+	// We're in a non-PIE binary
+	if (!recalculate) {
+		return (void*) elf_offset;
+	}
+
+	// Setup for the walk through the various shared objects
+	fffc_dl_iter_additional_data.path = path;
+	dl_iterate_phdr(fffc_dl_iter_callback, NULL);
+
+	// Apply our offsets
+	unsigned long symbol_offset = fffc_dl_iter_additional_data.addr;
+	symbol_offset += elf_offset;
+
+	// Cast and go home
+	return (void*) symbol_offset;
 }
 
 float fffc_get_neg_inf() {
@@ -1174,11 +1210,15 @@ int fffc_setup_call_state(void) {
 										CALL_STATE_FORMAT,
 										FFFC_GLOBAL_STATE.global_state_path,
 										FFFC_GLOBAL_STATE.call_count) + 1;
-	snprintf(	FFFC_CALL_STATE.call_state_path,
-				len,
-				CALL_STATE_FORMAT,
-				FFFC_GLOBAL_STATE.global_state_path,
-				FFFC_GLOBAL_STATE.call_count);
+	len = snprintf(	FFFC_CALL_STATE.call_state_path,
+					len,
+					CALL_STATE_FORMAT,
+					FFFC_GLOBAL_STATE.global_state_path,
+					FFFC_GLOBAL_STATE.call_count);
+	if (len == FFFC_MAX_PATH_LENGTH) {
+		fffc_print_red("Couldn't setup call state");
+		fffc_exit();
+	}
 	if (!mkdtemp(FFFC_CALL_STATE.call_state_path)) {
 		return -1;
 	}
@@ -1627,6 +1667,9 @@ int fffc_setup_mutation_state(char *target_name) {
 	strcat(FFFC_MUTATION_STATE.crash_path, CRASH_STATE_SUFFIX);
 	__sanitizer_set_report_path(FFFC_MUTATION_STATE.crash_path);
 
+	// Seed the rng
+	srand(iter);
+
 	// Redirect stdout
 	if (!fffc_debug()) {
 		char stdout_path[FFFC_MAX_PATH_LENGTH];
@@ -1793,7 +1836,10 @@ int build_allocate_event(void *location, unsigned long long length, struct FFFC_
 static
 int write_event_to_log(struct FFFC_log_event *event) {
 	lseek64(FFFC_MUTATION_STATE.log_fd, 0, SEEK_END);
-	write(FFFC_MUTATION_STATE.log_fd, (void*)event, sizeof(struct FFFC_log_event));
+	int written = write(FFFC_MUTATION_STATE.log_fd, (void*)event, sizeof(struct FFFC_log_event));
+	if (written < sizeof(struct FFFC_log_event)) {
+		fffc_print_yellow("Warning: unable to write events to log, corruption may result.");
+	}
 	return 0;
 }
 

@@ -55,7 +55,7 @@ def main():
     for target in arguments.targets:
         path = pathlib.Path(arguments.output) / target
         try:
-            exe = Executable(target, path, arguments.headers_only)
+            exe = Executable(target, target, path, arguments.headers_only)
             exe.generate_sources()
         except Exception as ex:
             traceback.print_exc()

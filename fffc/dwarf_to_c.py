@@ -35,6 +35,23 @@ class NotCompiledWithASAN(Exception):
         super().__init__("ELF " + elf + "was not compiled with ASAN")
 
 
+class NotCompiledWithDWARF(Exception):
+    """Raised when an ELF file was not compiled with DWARF"""
+    def __init__(self, elf=""):
+        if elf:
+            elf = str(elf) + " "
+        super().__init__("ELF " + elf + "was not compiled with DWARF info; add -g.")
+
+
+class NotWrittenInC(Exception):
+    """Raised when an ELF file was not written in C"""
+    def __init__(self, elf=""):
+        self.elf = elf
+        if elf:
+            elf = str(elf) + " "
+        super().__init__("ELF " + elf + "was not written in C, not fuzzing")
+
+
 class DwarfType:
     """Represents the C base types-- ints, chars, and so on.
 
@@ -930,6 +947,8 @@ class InferredHeader:
         # Don't emit builtin types
         if tname and tname.startswith("__builtin"):
             return
+        if tname and tname.startswith("_GLOBAL__sub_"):
+            return
         self.statements.append(ast)
 
     def generate_header(self):
@@ -1004,9 +1023,10 @@ class DwarfCompileUnit:
         self.cu_die = self.cu.get_top_DIE()
         self.offset_to_die_map = {}
         self.offset_to_type_map = {}
+        self.name = self.get_name()
         self.language = expect_string_attr(self.cu_die, self.language_attribute)
         if self.language not in self.acceptable_languages:
-            raise ValueError("Can't fuzz non-C compile units")
+            raise NotWrittenInC(self.name)
         self.compiler = self.get_compiler()
         self.build_dies()
 
@@ -1112,8 +1132,10 @@ class Runner:
     # in the headers above.
     compile_command = "gcc -O0 -g -fPIC -c -o {out} {source}"
 
-    def __init__(self, name, target_function, inferred_basename, outdir, pie):
+    def __init__(self, name, target_function, target_path, exe_path, inferred_basename, outdir, pie):
         self.target_name = name
+        self.target_path = target_path
+        self.exe_path = exe_path
         self.output_dir = outdir
         self.target_function = target_function
         self.inferred_header = '#include "%s"\n\n' % inferred_basename
@@ -1133,10 +1155,9 @@ class Runner:
     def write_source(self):
         runlib_source_path = self.runlib_name.with_suffix(".c")
         tmpl = RunnerTemplate(
-            self.target_function, self.target_name, self.inferred_header, self.pie
+            self.target_function, self.target_name, os.path.abspath(self.target_path), os.path.abspath(self.exe_path), self.inferred_header, self.pie
         )
         _, runlib_source = tmpl.inject()
-        print(runlib_source_path)
         with open(str(runlib_source_path), "w") as f:
             f.write(runlib_source)
 
@@ -1211,16 +1232,17 @@ class Mutator:
 
 class Executable:
 
+    target_path = None
     exe_path = None
     elf_info = None
     dwarf_info = None
     compile_units = None
 
     # XXX this should probably be a global
-    oneshot_compile_command = "gcc -O0 -g -fPIC -o {out} {source}"
-    compile_command = "gcc -O0 -g -fPIC -c -o {out} {source}"
+    oneshot_compile_command = "gcc -Og -g -fPIC -o {out} {source}"
+    compile_command = "gcc -Og -g -fPIC -c -o {out} {source}"
     link_command = (
-        "gcc -shared -O0 -g -fPIC -o {out} {sources} -lsubhook"
+        "gcc -shared -Og -g -fPIC -o {out} {sources} -lsubhook"
     )
 
     # getting the location of the asan runtime is really expensive,
@@ -1229,13 +1251,20 @@ class Executable:
 
     commands_run = None
 
-    def __init__(self, exe, output_dir, headers_only):
+    def __init__(self, exe, target, output_dir, headers_only):
+        self.target_path = Path(target)
         self.exe_path = Path(exe)
         self.output_dir = Path(output_dir)
-        os.makedirs(str(output_dir))
+        try:
+            os.makedirs(str(output_dir))
+        except FileExistsError:
+            pass
         self.headers_only = headers_only
+        self.target_file = self.target_path.open("rb")
         self.exe_file = self.exe_path.open("rb")
-        self.elf_info = ELFFile(self.exe_file)
+        self.elf_info = ELFFile(self.target_file)
+        if not self.elf_info.has_dwarf_info():
+            raise NotCompiledWithDWARF(self.target)
         self.dwarf_info = self.elf_info.get_dwarf_info()
         self.compile_units = self.get_compile_units()
         self.asan_location = self.get_asan_lib()
@@ -1248,11 +1277,45 @@ class Executable:
         self.commands_run.append(" ".join(args[0]))
         subprocess.run(*args, **kwargs)
 
+    def build_debuggable_libs(self):
+        compiler = self.compile_units[0][1].compiler[0]
+        libnames = []
+        dyn = self.elf_info.get_section_by_name(".dynamic")
+        for tag in dyn.iter_tags():
+            if tag.entry.d_tag == "DT_NEEDED":
+                cmd = [compiler, "-print-file-name=" + tag.needed]
+                result = subprocess.run(cmd, universal_newlines=True, stdout=subprocess.PIPE)
+                if result.returncode != 0:
+                    raise Exception("Unable to run compiler; do you have a working build environment?")
+                libname = os.path.abspath(result.stdout.strip())
+                # this is a problem with old clang installs on debian
+                if libname != tag.needed:
+                    libnames.append(libname)
+        for libname in libnames:
+            try:
+                exe = Executable(str(self.exe_path), libname, self.output_dir, self.headers_only)
+                exe.generate_sources()
+            except NotCompiledWithASAN as exc:
+                # generally speaking people aren't trying to fuzz these. Suppress the output for
+                # legibility.
+                if "asan" not in libname:
+                    if "libc.so" not in libname:
+                        if "libm.so" not in libname:
+                            print(exc)
+            except NotCompiledWithDWARF as exc:
+                # generally speaking people aren't trying to fuzz these. Suppress the output for
+                # legibility.
+                if "asan" not in libname:
+                    if "libc.so" not in libname:
+                        if "libm.so" not in libname:
+                            print(exc)
+
+
     def get_asan_lib(self):
         try:
             compiler = self.compile_units[0][1].compiler[0]
         except IndexError as error:
-            raise NotCompiledWithASAN() from error
+            raise NotCompiledWithASAN(str(self.target_path)) from error
         if compiler not in self.asan_location_cache:
             lib = None
             dyn = self.elf_info.get_section_by_name(".dynamic")
@@ -1265,7 +1328,7 @@ class Executable:
                 except Exception:
                     err = True
             if not lib:
-                raise Exception("Didn't find libasan dependency; please recompile %s with -fsanitize=address" % self.exe_path)
+                raise Exception("Didn't find libasan dependency; please recompile %s with -fsanitize=address" % self.target_path)
             cmd = [compiler, "-print-file-name=" + lib]
             result = subprocess.run(cmd, universal_newlines=True, stdout=subprocess.PIPE)
             if result.returncode != 0:
@@ -1298,8 +1361,9 @@ class Executable:
         for cu in self.dwarf_info.iter_CUs():
             try:
                 compile_units.append(self.process_compile_unit(cu))
-            except ValueError as err:
-                print("Not fuzzing non-C compile unit; continuing...")
+            except NotWrittenInC as err:
+                if "asan" not in err.elf:
+                    print(err)
         return sorted(compile_units)
 
     def generate_base_mutators(self):
@@ -1343,7 +1407,7 @@ class Executable:
     def generate_runners_for_cu(self, inferred_header, cu):
         header = inferred_header.header_name
         for name, runnable in cu.get_runnable_functions():
-            yield Runner(name, runnable, header, self.output_dir, self.pie)
+            yield Runner(name, runnable, str(self.target_path), str(self.exe_path), header, self.output_dir, self.pie)
 
     def generate_mutator_for_cu(self, inferred_header, cu):
         header = inferred_header.header_name
@@ -1394,17 +1458,17 @@ class Executable:
         tracer = "export FFFC_TRACING=Fals"
         replay = "export FFFC_DEBUG_REPLAY=" + ('/' * 4096)
         preload = 'ASAN_OPTIONS=detect_leaks=0 LD_PRELOAD="' + " ".join([self.asan_location, lib]) + '"'
-        return shell + "\n" + tracer + "\n" + replay + "\n" + preload + " " + str(self.exe_path.absolute()) + ' "$@"' + "\n"
+        return shell + "\n" + tracer + "\n" + replay + "\n" + preload + " " + str(self.exe_path.absolute()) + ' "$@"' + "\n" # actually the exe path
 
     def make_debugger_script(self, lib):
         # makes the gdb script itself, ie, the one the gdb runs
         preload = 'ASAN_OPTIONS=detect_leaks=0 LD_PRELOAD="' + " ".join([self.asan_location, lib]) + '"'
         env_setter = "set exec-wrapper env %s" % preload
-        runner = "target exec %s" % str(self.exe_path.absolute())
+        runner = "target exec %s" % str(self.exe_path.absolute()) # actually the exe path
         fork_follow = "set follow-fork-mode child"
         unset_lines = "unset env LINES"
         unset_columns = "unset env COLUMNS"
-        set_progname = "set env _ " + str(self.exe_path.absolute())
+        set_progname = "set env _ " + str(self.exe_path.absolute()) # actually the exe path
         run_cmd = "run\n"
         return "\n".join([env_setter, runner, fork_follow, unset_lines, unset_columns, set_progname, run_cmd])
 
@@ -1413,7 +1477,7 @@ class Executable:
         shell = "#! /bin/bash"
         tracer = "export FFFC_TRACING=True"
         replay = """export FFFC_DEBUG_REPLAY=$(PAD=$(printf '%0.1s' "/"{1..4096}) ; echo $FFFC_DEBUG_REPLAY${PAD:${#FFFC_DEBUG_REPLAY}})"""
-        shell_script = shell + "\n" + tracer + "\n" + replay + "\ngdb -x " + str(gdb_script_path) + " " + str(self.exe_path.absolute()) + ' "$@"'
+        shell_script = shell + "\n" + tracer + "\n" + replay + "\ngdb -x " + str(gdb_script_path) + " " + str(self.exe_path.absolute()) + ' "$@"' # actually the exe path
         return shell_script
 
     def do_link(self, linkage):
@@ -1478,7 +1542,8 @@ class Executable:
         outlibs = []
         for l in linkages:
             outlib = self.do_link(l)
-            run_script_name = outlib.replace(".so", "_runner.sh")
+            # drop the .so and add "_runner.sh"
+            run_script_name = outlib[:-3] + "_runner.sh"
             with open(str(run_script_name), "w") as f:
                 print("Generating", f.name, "...")
                 f.write(self.make_run_script(outlib, env_adjuster))
@@ -1487,20 +1552,20 @@ class Executable:
 
         # build the rebuilder script
         for outlib in outlibs:
-            rebuilder_script_name = outlib.replace(".so", "_rebuild.sh")
+            rebuilder_script_name = outlib[:-3] + "_rebuild.sh"
             with open(str(rebuilder_script_name), "w") as f:
-                print("Generating", f.name, "...")
                 f.write(self.make_rebuilder_script())
                 self.make_executable(rebuilder_script_name)
 
         # build the debugger script
         for outlib in outlibs:
-            debugger_script_name = outlib.replace(".so", "_debug.gdb")
-            debugger_script_runner_name = outlib.replace(".so", "_debug.sh")
+            debugger_script_name = outlib[:-3] + "_debug.gdb"
+            debugger_script_runner_name = outlib[:-3] + "_debug.sh"
             with open(str(debugger_script_name), "w") as f:
-                print("Generating", f.name, "...")
                 f.write(self.make_debugger_script(outlib))
             with open(str(debugger_script_runner_name), "w") as f:
-                print("Generating", f.name, "...")
                 f.write(self.make_debugger_script_runner(outlib, env_adjuster, debugger_script_name))
                 self.make_executable(debugger_script_runner_name)
+
+        # and build for all the depended-upon libraries
+        self.build_debuggable_libs()

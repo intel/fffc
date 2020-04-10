@@ -145,7 +145,7 @@ void fffc_precall(void);
 void fffc_postcall(void);
 void fffc_remove_hook(void);
 void fffc_install_hook(void);
-void* fffc_get_pointer_to_symbol(long long unsigned elf_offset, int recalculate);
+void* fffc_get_pointer_to_symbol(long long unsigned int elf_offset, char* path, int recalculate);
 
 int fffc_fork(void);
 void fffc_exit(void);
