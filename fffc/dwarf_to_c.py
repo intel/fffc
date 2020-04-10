@@ -1286,7 +1286,9 @@ class Executable:
                 if result.returncode != 0:
                     raise Exception("Unable to run compiler; do you have a working build environment?")
                 libname = result.stdout.strip()
-                libnames.append(libname)
+                # this is a problem with old clang installs on debian
+                if libname != tag.needed:
+                    libnames.append(libname)
         for libname in libnames:
             try:
                 exe = Executable(str(self.exe_path), libname, self.output_dir, self.headers_only)
