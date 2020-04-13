@@ -1298,8 +1298,9 @@ class Executable:
         for line in result.stdout.splitlines():
             try:
                 soname, sep, path, addr = line.split()
-                if "not found" in path:
-                    raise Exception("Unable to locate shared library; do you have a running environment?")
+                if path == "not":
+                    if addr == "found":
+                        raise Exception("Unable to locate shared library; do you have a running environment?")
                 libnames.append(os.path.realpath(path))
             except ValueError:
                 continue

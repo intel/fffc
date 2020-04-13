@@ -793,7 +793,9 @@ class StructureMutatorTemplate(Template):
                     try:
                         decl, defn = make_commented_mutator_defn(node)
                     except Exception:
+                        print("Warning: failed to generate a mutator definition.")
                         print(node)
+                        print(struct_object)
                     self.decls.append(decl)
                     self.defn = defn
                     break
