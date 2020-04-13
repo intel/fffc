@@ -55,11 +55,13 @@ def main():
     for target in arguments.targets:
         path = pathlib.Path(arguments.output) / target
         try:
-            exe = Executable(target, target, path, arguments.headers_only)
+            # build the dependencies from the toplevel
+            exe = Executable(target, target, path, arguments.headers_only, True)
             exe.generate_sources()
         except Exception as ex:
             traceback.print_exc()
             continue
+        Executable.libraries = []
 
 
 if __name__ == "__main__":
