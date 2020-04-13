@@ -790,7 +790,10 @@ class StructureMutatorTemplate(Template):
                 if not self.defn:
                     for memb_mut in self.build_all_member_mutators(struct_object):
                         node.body.block_items[-1:-1] = memb_mut
-                    decl, defn = make_commented_mutator_defn(node)
+                    try:
+                        decl, defn = make_commented_mutator_defn(node)
+                    except Exception:
+                        print(node)
                     self.decls.append(decl)
                     self.defn = defn
                     break
