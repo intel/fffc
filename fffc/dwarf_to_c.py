@@ -32,7 +32,7 @@ class NotCompiledWithASAN(Exception):
     def __init__(self, elf=""):
         if elf:
             elf = str(elf) + " "
-        super().__init__("ELF " + elf + "was not compiled with ASAN")
+        super().__init__("ELF " + elf + "was not compiled with ASAN, not fuzzing")
 
 
 class NotCompiledWithDWARF(Exception):
@@ -40,7 +40,15 @@ class NotCompiledWithDWARF(Exception):
     def __init__(self, elf=""):
         if elf:
             elf = str(elf) + " "
-        super().__init__("ELF " + elf + "was not compiled with DWARF info; add -g.")
+        super().__init__("ELF " + elf + "was not compiled with DWARF info, not fuzzing")
+
+
+class NotCompiledWithGcov(Exception):
+    """Raised when an ELF file was not compiled with gcov"""
+    def __init__(self, elf=""):
+        if elf:
+            elf = str(elf) + " "
+        super().__init__("ELF " + elf + "was not compiled with gcov info, not fuzzing")
 
 
 class NotWrittenInC(Exception):
@@ -1237,6 +1245,7 @@ class Executable:
     elf_info = None
     dwarf_info = None
     compile_units = None
+    libraries = []
 
     # XXX this should probably be a global
     oneshot_compile_command = "gcc -Og -g -fPIC -o {out} {source}"
@@ -1245,16 +1254,15 @@ class Executable:
         "gcc -shared -Og -g -fPIC -o {out} {sources} -lsubhook"
     )
 
-    # getting the location of the asan runtime is really expensive,
-    # so we share this state. It isn't ideal, but... it works.
-    asan_location_cache = {}
-
     commands_run = None
 
-    def __init__(self, exe, target, output_dir, headers_only):
+    def __init__(self, exe, target, output_dir, headers_only, build_dependencies):
         self.target_path = Path(target)
         self.exe_path = Path(exe)
         self.output_dir = Path(output_dir)
+        self.build_dependencies = build_dependencies
+        if build_dependencies:
+            self.get_libs()
         try:
             os.makedirs(str(output_dir))
         except FileExistsError:
@@ -1264,7 +1272,11 @@ class Executable:
         self.exe_file = self.exe_path.open("rb")
         self.elf_info = ELFFile(self.target_file)
         if not self.elf_info.has_dwarf_info():
-            raise NotCompiledWithDWARF(self.target)
+            raise NotCompiledWithDWARF(self.target_path)
+        if not self.built_with_asan():
+            raise NotCompiledWithASAN(self.target_path)
+        if not self.built_with_gcov():
+            raise NotCompiledWithGcov(self.target_path)
         self.dwarf_info = self.elf_info.get_dwarf_info()
         self.compile_units = self.get_compile_units()
         self.asan_location = self.get_asan_lib()
@@ -1277,70 +1289,81 @@ class Executable:
         self.commands_run.append(" ".join(args[0]))
         subprocess.run(*args, **kwargs)
 
-    def build_debuggable_libs(self):
-        compiler = self.compile_units[0][1].compiler[0]
+    def get_libs(self):
         libnames = []
-        dyn = self.elf_info.get_section_by_name(".dynamic")
-        for tag in dyn.iter_tags():
-            if tag.entry.d_tag == "DT_NEEDED":
-                cmd = [compiler, "-print-file-name=" + tag.needed]
-                result = subprocess.run(cmd, universal_newlines=True, stdout=subprocess.PIPE)
-                if result.returncode != 0:
-                    raise Exception("Unable to run compiler; do you have a working build environment?")
-                libname = os.path.abspath(result.stdout.strip())
-                # this is a problem with old clang installs on debian
-                if libname != tag.needed:
-                    libnames.append(libname)
-        for libname in libnames:
+        cmd = ["ldd", str(self.target_path)]
+        result = subprocess.run(cmd, universal_newlines=True, stdout=subprocess.PIPE)
+        if result.returncode != 0:
+            raise Exception("Unable to run ldd; do you have a working build environment?")
+        for line in result.stdout.splitlines():
             try:
-                exe = Executable(str(self.exe_path), libname, self.output_dir, self.headers_only)
+                soname, sep, path, addr = line.split()
+                if path == "not":
+                    if addr == "found":
+                        raise Exception("Unable to locate shared library; do you have a running environment?")
+                libnames.append(os.path.realpath(path))
+            except ValueError:
+                continue
+        self.libraries.extend(libnames)
+
+    def build_debuggable_libs(self):
+        ignore = ["asan", "libc", "libdl", "libpthread", "libgcc", "librt"]
+        for libname in self.libraries:
+            exe = None
+            try:
+                # do not build dependencies when you recurse
+                exe = Executable(str(self.exe_path), libname, self.output_dir, self.headers_only, False)
+                print("Generating runners for %s..." % libname)
                 exe.generate_sources()
             except NotCompiledWithASAN as exc:
                 # generally speaking people aren't trying to fuzz these. Suppress the output for
                 # legibility.
-                if "asan" not in libname:
-                    if "libc.so" not in libname:
-                        if "libm.so" not in libname:
-                            print(exc)
+                for ign in ignore:
+                    if ign in libname:
+                        found = True
+                if not found:
+                    print(exc)
             except NotCompiledWithDWARF as exc:
                 # generally speaking people aren't trying to fuzz these. Suppress the output for
                 # legibility.
-                if "asan" not in libname:
-                    if "libc.so" not in libname:
-                        if "libm.so" not in libname:
-                            print(exc)
+                for ign in ignore:
+                    if ign in libname:
+                        found = True
+                if not found:
+                    print(exc)
+            except NotCompiledWithGcov as exc:
+                # generally speaking people aren't trying to fuzz these. Suppress the output for
+                # legibility.
+                for ign in ignore:
+                    if ign in libname:
+                        found = True
+                if not found:
+                    print(exc)
 
+
+    def built_with_asan(self):
+        symbols = self.elf_info.get_section_by_name('.symtab')
+        if symbols:
+            return bool(symbols.get_symbol_by_name('__asan_init'))
+        return False
+
+    def built_with_gcov(self):
+        symbols = self.elf_info.get_section_by_name(".symtab")
+        if symbols:
+            # clang
+            if symbols.get_symbol_by_name("__llvm_gcov_init"):
+                return True
+            # gcc
+            if symbols.get_symbol_by_name("__gcov_init"):
+                return True
+        return False
 
     def get_asan_lib(self):
-        try:
-            compiler = self.compile_units[0][1].compiler[0]
-        except IndexError as error:
-            raise NotCompiledWithASAN(str(self.target_path)) from error
-        if compiler not in self.asan_location_cache:
-            lib = None
-            dyn = self.elf_info.get_section_by_name(".dynamic")
-            err = False
-            for tag in dyn.iter_tags():
-                try:
-                    if "asan" in tag.needed:
-                        lib = tag.needed
-                        break
-                except Exception:
-                    err = True
-            if not lib:
-                raise Exception("Didn't find libasan dependency; please recompile %s with -fsanitize=address" % self.target_path)
-            cmd = [compiler, "-print-file-name=" + lib]
-            result = subprocess.run(cmd, universal_newlines=True, stdout=subprocess.PIPE)
-            if result.returncode != 0:
-                raise Exception("Unable to run compiler; do you have a working build environment?")
-            libname = result.stdout.strip()
-            if (libname == lib) and ("clang" in compiler):
-                # this appears to be a bug in older clang versions. Make one last attempt.
-                possible_paths = glob.glob("/usr/lib/clang/*/lib/linux/" + lib)
-                if possible_paths:
-                    libname = possible_paths[0]
-            self.asan_location_cache[compiler] = os.path.realpath(libname)
-        return self.asan_location_cache[compiler]
+        # XXX this is a hack
+        for libname in self.libraries:
+            if "asan" in libname:
+                return libname
+        raise NotCompiledWithASAN
 
     def is_pie(self):
         e_type = self.elf_info.header['e_type']
@@ -1568,4 +1591,5 @@ class Executable:
                 self.make_executable(debugger_script_runner_name)
 
         # and build for all the depended-upon libraries
-        self.build_debuggable_libs()
+        if self.build_dependencies:
+            self.build_debuggable_libs()
