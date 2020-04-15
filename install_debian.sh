@@ -10,6 +10,9 @@ cd subhook
 cmake .
 sudo make install
 cd ..
+
+# Fix the broken clang install
+echo "/usr/lib/clang/6.0/lib/linux" | sudo tee /etc/ld.so.conf.d/clang.conf
 sudo ldconfig
 
 # Install fffc
