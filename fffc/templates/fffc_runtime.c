@@ -426,7 +426,7 @@ int get_random_state() {
 }
 
 static
-int reap(void) {
+int do_reap(void) {
 	// Go back to the head of the parent file
 	if (lseek(FFFC_GENERATION_STATE.parents_fd, 0, SEEK_SET) < 0) {
 		fffc_print_red("Couldn't seek in the parents file");
@@ -494,6 +494,22 @@ int reap(void) {
 	unlink(FFFC_GENERATION_STATE.parents_path);
 	rename(tmp_parents_path, FFFC_GENERATION_STATE.parents_path);
 	free(scores);
+	return 0;
+}
+
+static
+int reap(void) {
+	// Do all of our reaping in a separate process to avoid putting the
+	// allocator in a different state between generations.
+	int pid = fork();
+	if (pid) {
+		fffc_wait();
+	} else {
+		int retval = do_reap();
+		_exit(retval);
+	}
+	// XXX we should return the exit code of the child, but there's not
+	// XXX much more to do than print errors, which we already do.
 	return 0;
 }
 
