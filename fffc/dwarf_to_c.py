@@ -193,6 +193,8 @@ class DwarfBaseType(DwarfType):
 
     encoding_tag = "DW_AT_encoding"
 
+    seen_but_not_known = set()
+
     def __init__(self, die, cu):
         self.die = die
         self.cu_object = cu
@@ -202,12 +204,20 @@ class DwarfBaseType(DwarfType):
         if self.typename in self.actual_base_types:
             self.status = TypeStatus.DONE
         else:
-            print(
-                "Found unknown basetype. This is probably a bug.",
-                self.typename,
-                self.encoding,
-                self.size,
-            )
+            identifier = (self.typename, self.encoding, self.size)
+            if identifier not in self.seen_but_not_known:
+                print(
+                    "Found unknown basetype. This may be a bug.",
+                    self.typename,
+                    self.encoding,
+                    self.size,
+                )
+                self.seen_but_not_known.add(identifier)
+            for typename, typeinfo in self.actual_base_types.items():
+                if typeinfo == (self.encoding, self.size):
+                    self.typename = typename
+                    self.status = TypeStatus.DONE
+                    return
             self.status = TypeStatus.NEW
 
     def _get_encoding(self):
@@ -536,11 +546,11 @@ class DwarfFunctionType(DwarfType):
                     break
                 argument = argument.type
 
-    def build_ast(self, name, typename, arguments, return_type):
+    def build_ast(self, name, typename, arguments, return_type, qualifiers=None, funcspec=None, storage=None):
         # TODO: shouldn't there be a funcspec here?
         params = c_ast.ParamList(arguments)
         return_ref = return_type.get_reference()
-        ret = return_ref(name)
+        ret = return_ref(name, qualifiers, funcspec, storage)
         ast = c_ast.FuncDecl(params, ret)
         return ast
 
@@ -553,7 +563,7 @@ class DwarfFunctionType(DwarfType):
     def get_reference(self):
         def ref(name=None, qualifiers=None, funcspec=None, storage=None):
             self._setup()
-            ast = self.build_ast(name, self.typename, self.arguments, self.return_type)
+            ast = self.build_ast(name, self.typename, self.arguments, self.return_type, qualifiers, funcspec, storage)
             self.status = TypeStatus.DONE
             return ast
 
@@ -561,7 +571,7 @@ class DwarfFunctionType(DwarfType):
 
     def declare(self, name=None, qualifiers=None, funcspec=None, storage=None):
         self._setup()
-        ast = self.build_ast(name, self.typename, self.arguments, self.return_type)
+        ast = self.build_ast(name, self.typename, self.arguments, self.return_type, qualifiers, funcspec, storage)
         self.status = TypeStatus.DONE
         return ast
 
@@ -698,10 +708,12 @@ class DwarfModifierType(DwarfType):
 
 class DwarfQualifiedType(DwarfModifierType):
     def build_ast(self, name, qualifiers, funcspec, storage):
+        qualifiers = qualifiers or []
         funcspec = funcspec or []
         storage = storage or []
         funcspec.extend(self.funcspec)
         storage.extend(self.storage)
+        qualifiers.extend(self.qualifiers)
         if self.underlying_type.get_typename():
             underlying_ref = self.underlying_type.get_reference()
             ast = underlying_ref(name, qualifiers, funcspec, storage)
@@ -713,8 +725,6 @@ class DwarfQualifiedType(DwarfModifierType):
         def ref(name=None, qualifiers=None, funcspec=None, storage=None):
             if not self.underlying_type:
                 self.underlying_type = self.get_underlying_type_definition()
-            qualifiers = qualifiers or []
-            qualifiers.extend(self.qualifiers)
             return self.build_ast(name, qualifiers, funcspec, storage)
 
         return ref
@@ -936,8 +946,6 @@ class DwarfVolatileType(DwarfQualifiedType):
 
 class InferredHeader:
     def __init__(self, cu, outdir):
-        self.named = {}
-        self.defined = {}
         self.statements = []
         self.output_dir = outdir
         self.header_name = self.get_header_name(cu.get_name(), cu.get_cu_offset())
@@ -950,8 +958,6 @@ class InferredHeader:
 
     def add_type(self, name, t, ast):
         tname = t.get_typename()
-        self.named[name or tname] = t
-        self.defined[name or tname] = t.get_status()
         # Don't emit builtin types
         if tname and tname.startswith("__builtin"):
             return
@@ -1102,6 +1108,12 @@ class DwarfCompileUnit:
                 continue
             yield t
 
+    def get_incomplete_types(self):
+        generator = CGenerator()
+        for t in self.offset_to_type_map.values():
+            if t.get_status() != TypeStatus.DONE:
+                yield t
+
     def get_runnable_functions(self):
         for t in self.offset_to_type_map.values():
             if t.get_status() != TypeStatus.DONE:
@@ -1138,7 +1150,7 @@ class Runner:
 
     # Compiling the runner is pretty simple, since everything we need is already
     # in the headers above.
-    compile_command = "gcc -O0 -g -fPIC -c -o {out} {source}"
+    compile_command = "cc -Og -g -fPIC -c -o {out} {source}"
 
     def __init__(self, name, target_function, target_path, exe_path, inferred_basename, outdir, pie):
         self.target_name = name
@@ -1180,13 +1192,14 @@ class Mutator:
 
     output_dir = None
     inferred_header_path = None
-    compile_command = "gcc -fPIC -O0 -g -Wno-visibility -Wno-incompatible-pointer-types-discards-qualifiers -c -o {out} {source}"
+    compile_command = "cc -fPIC -Og -g -Wno-discarded-qualifiers -c -o {out} {source}"
 
     decls = None
     defns = None
 
+    mutated_types = set()
+
     def __init__(self, header_path, outdir):
-        self.mutated = set()
         self.output_dir = outdir
         self.inferred_header_path = header_path
         self.source_path = outdir / self.inferred_header_path.replace(
@@ -1200,7 +1213,7 @@ class Mutator:
         return '#include "' + filename + '"\n'
 
     def add_mutator(self, type_object):
-        self.mutated.add(type_object.get_typename())
+        self.mutated_types.add(type_object)
         decls, defn = type_object.generate_mutator()
         if all((decls, defn)):
             self.decls.extend(decls)
@@ -1237,6 +1250,10 @@ class Mutator:
         cmd = self.compile_command.format(out=outfile, source=self.source_path)
         return outfile, cmd
 
+    def get_mutated_types(self):
+        for t in self.mutated_types:
+            yield t
+
 
 class Executable:
 
@@ -1248,10 +1265,10 @@ class Executable:
     libraries = []
 
     # XXX this should probably be a global
-    oneshot_compile_command = "gcc -Og -g -fPIC -o {out} {source}"
-    compile_command = "gcc -Og -g -fPIC -c -o {out} {source}"
+    oneshot_compile_command = "cc -Og -g -fPIC -o {out} {source}"
+    compile_command = "cc -Og -g -fPIC -c -o {out} {source}"
     link_command = (
-        "gcc -shared -Og -g -fPIC -o {out} {sources} -lsubhook"
+        "cc -shared -Og -g -fPIC -o {out} {sources} -lsubhook"
     )
 
     commands_run = None
@@ -1280,10 +1297,10 @@ class Executable:
         self.dwarf_info = self.elf_info.get_dwarf_info()
         self.compile_units = self.get_compile_units()
         self.asan_location = self.get_asan_lib()
-        self.named_types = {}
-        self.mutated_types = set()
         self.commands_run = []
         self.pie = self.is_pie()
+        self.mutated_types = {}
+        self.incomplete_types = {}
 
     def run(self, *args, **kwargs):
         self.commands_run.append(" ".join(args[0]))
@@ -1435,8 +1452,11 @@ class Executable:
     def generate_mutator_for_cu(self, inferred_header, cu):
         header = inferred_header.header_name
         mutator = Mutator(header, self.output_dir)
+        generator = CGenerator()
         for t in cu.get_mutable_types():
             mutator.add_mutator(t)
+            ref = generator.visit(t.get_reference()())
+            self.incomplete_types.pop(ref, None)
         return mutator
 
     def generate_header_for_cu(self, cu):
@@ -1444,27 +1464,31 @@ class Executable:
         cu.get_named_types()
         return ih
 
-    def extend_exceptions(self, header, mutator):
-        self.named_types.update(header.named)
-        self.mutated_types |= mutator.mutated
-        header.named.clear()
-        mutator.mutated.clear()
-
     def define_exceptions(self):
         exception_mutator_decls = []
         exception_mutator_defns = []
-        for ex in self.named_types.keys() - self.mutated_types:
-            t = self.named_types[ex]
-            decls, defn = DoNothingMutatorTemplate().inject(t)
+        for ref, t in self.incomplete_types.items():
+            if ref in self.mutated_types:
+                continue
+            if type(t) == DwarfStructType:
+                # build the donothing mutators for incomplete structs
+                decls, defn = DoNothingMutatorTemplate().inject(t)
+            elif type(t) == DwarfUnionType:
+                # build the donothing mutators for incomplete unions
+                decls, defn = DoNothingMutatorTemplate().inject(t)
+            else:
+                # build a real mutator for most types
+                decls, defn = t.generate_mutator()
             exception_mutator_decls.extend(decls)
             exception_mutator_defns.append(defn)
         do_nothing_path = str(self.output_dir / "do_nothing.c")
         with open(str(do_nothing_path), "w+") as f:
+            f.write('#include "fffc_runtime.h"\n')
             f.write('#include "mutator.h"\n\n')
-            for defn in exception_mutator_defns:
+            for defn in sorted(set(exception_mutator_defns)):
                 f.write(defn)
         with open(str(self.output_dir / "mutator.h"), "a+") as f:
-            for decl in exception_mutator_decls:
+            for decl in sorted(set(exception_mutator_decls)):
                 f.write(decl + ";\n\n")
         # Again, we're actually just replacing ".c" with ".o" here
         do_nothing_binary = do_nothing_path[:-2] + ".o"
@@ -1535,7 +1559,6 @@ class Executable:
             inferred_header.write_header()
             cu.get_builtin_types()
             mutator = self.generate_mutator_for_cu(inferred_header, cu)
-            self.extend_exceptions(inferred_header, mutator)
             mutator.write_header()
             mutator.write_source()
             mutator_out, mutator_cmd = mutator.get_compile_command()
@@ -1555,6 +1578,13 @@ class Executable:
                         runner_cmd,
                     ]
                 )
+            generator = CGenerator()
+            for t in cu.get_incomplete_types():
+                ref =  generator.visit(t.get_reference()())
+                self.incomplete_types[ref] = t
+            for t in mutator.get_mutated_types():
+                ref = generator.visit(t.get_reference()())
+                self.mutated_types[ref] = t
 
         # now build the exceptions
         do_nothing_binary = self.define_exceptions()

@@ -37,14 +37,15 @@ def change_declname(obj, new_name):
 
 
 def make_mutator_decl_from_arg_type(
-    arg_type, generator=CGenerator(), seen={}, point=True
+    arg_type, generator=CGenerator(), seen={}, point=True, change_name=False
 ):
     # memoize
     if arg_type in seen:
         return seen[arg_type]
     mut_name = "fffc_mutator_for_target_type"
     # change the type declname
-    change_declname(arg_type, "storage")
+    if change_name:
+        change_declname(arg_type, "storage")
     # first, wrap the type in a pointer to match the necessary mutator semantics
     if point:
         arg_type_ptr = c_ast.PtrDecl([], arg_type)
@@ -79,16 +80,17 @@ def make_call_from_mutator_decl(arg_name, decl):
 
 
 def make_commented_mutator_call_from_var(var_name, var_type, generator=CGenerator()):
-    desired_name, mutator_decl = make_mutator_decl_from_arg_type(var_type)
+    desired_name, mutator_decl = make_mutator_decl_from_arg_type(var_type, change_name=True)
     mutator_call = make_call_from_mutator_decl(var_name, mutator_decl)
     comment = "/* " + desired_name + "*/\n"
     call = comment + generator.visit(mutator_call) + ";"
     return call
 
 
-def make_commented_mutator_defn(node, generator=CGenerator()):
+def make_commented_mutator_defn(node, generator=CGenerator(), change_name=False):
     desired_name, decl = make_mutator_decl_from_arg_type(
-        node.decl.type.args.params[0].type
+        node.decl.type.args.params[0].type,
+        change_name=change_name
     )
     node.decl = decl
     comment = "/* " + desired_name + "*/\n"
@@ -285,7 +287,7 @@ class Template:
                     else:
                         ut = dwarf_type.define()
                     underlying_mutator_name, underlying_decl_ast = make_mutator_decl_from_arg_type(
-                        ut, point=True
+                        ut, point=True, change_name=True
                     )
                     comment = "/* " + underlying_mutator_name + "*/\n"
                     underlying_mutator_call = make_call_from_mutator_decl(
@@ -341,9 +343,6 @@ class DoNothingMutatorTemplate(Template):
     template_name = "do_nothing_mutator.c"
     placeholder_type_name = "__TARGET_TYPE__"
 
-    # XXX this should go away
-    pointer_depth = 6
-
     def replace_placeholder_type(self, dwarf_type):
         for node in self.get_nodes(self.ast):
             try:
@@ -353,7 +352,7 @@ class DoNothingMutatorTemplate(Template):
                     else:
                         replacement = dwarf_type.define(node.type.declname)
                     replacement_pointer = c_ast.PtrDecl([], replacement)
-                    node.type = replacement_pointer
+                    node.type = replacement
                 if type(node) == c_ast.Typename:
                     if self.placeholder_type_name in node.type.type.names:
                         if dwarf_type.get_typename():
@@ -361,7 +360,7 @@ class DoNothingMutatorTemplate(Template):
                         else:
                             replacement = dwarf_type.define()
                         replacement_pointer = c_ast.PtrDecl([], replacement)
-                        node.type = replacement_pointer
+                        node.type = replacement
             except AttributeError as ex:
                 continue
 
@@ -372,13 +371,10 @@ class DoNothingMutatorTemplate(Template):
         for node in self.get_nodes(self.ast):
             if type(node) == c_ast.FuncDef:
                 argtype = node.decl.type.args.params[0].type
-                for i in range(self.pointer_depth):
-                    node_copy = copy.deepcopy(node)
-                    node_copy.decl.type.args.params[0].type = argtype
-                    decl, defn = make_commented_mutator_defn(node_copy)
-                    decls.append(decl)
-                    defns += defn
-                    argtype = c_ast.PtrDecl([], argtype)
+                node.decl.type.args.params[0].type = argtype
+                decl, defn = make_commented_mutator_defn(node)
+                decls.append(decl)
+                defns += defn
                 return decls, defns
 
     def inject(self, obj):
@@ -583,7 +579,7 @@ class EnumMutatorTemplate(Template):
         for node in self.get_nodes(self.ast):
             if type(node) == c_ast.FuncDef:
                 if not defn:
-                    decl, defn = make_commented_mutator_defn(node)
+                    decl, defn = make_commented_mutator_defn(node, change_name=True)
                     decls.append(decl)
         return decls, defn
 
@@ -691,9 +687,9 @@ class StructureMutatorTemplate(Template):
         # One way to get around that is to add an allocator API for types. I could then return a
         # pointer to the allocated type, then copy?
         #
-        mutator_desired_name, mutator_decl_ast = make_mutator_decl_from_arg_type(
-            member_ast.type
-        )
+        mutator_desired_name, _ = make_mutator_decl_from_arg_type(member_ast.type)
+        _, mutator_decl_ast = make_mutator_decl_from_arg_type(
+            copy.deepcopy(member_ast.type), change_name=True)
         mutator_id = c_ast.ID(mutator_decl_ast.name)
         if not member_reference:
             member_reference = self.build_arrow_ref(member_ast.name)
@@ -734,15 +730,26 @@ class StructureMutatorTemplate(Template):
                 body = tmpl.build_nested_mutator(member_type, member_reference)
                 return c_ast.Compound(body.block_items[:-1])
             elif type(member_type) == dwarf_to_c.DwarfUnionType:
-                tmpl = UnionMutatorTemplate()
-                rnd = tmpl.build_random_value(member_type)
-                nested_muts = [rnd]
-                for compound in tmpl.build_all_member_mutators(
-                    member_type, member_reference
-                ):
-                    nested_muts.extend(compound.block_items)
-                out = c_ast.Compound(nested_muts)
-                return out
+                if not member_ast.name:
+                    # this is the doubly anonymous case, which means we can refer to the nested members as
+                    # though they were toplevel members (because C is kinda weird)
+                    tmpl = UnionMutatorTemplate()
+                    rnd = tmpl.build_random_value(member_type)
+                    nested_muts = [rnd]
+                    for compound in tmpl.build_all_member_mutators(member_type):
+                        nested_muts.extend(compound.block_items)
+                    out = c_ast.Compound(nested_muts)
+                    return out
+                else:
+                    tmpl = UnionMutatorTemplate()
+                    rnd = tmpl.build_random_value(member_type)
+                    nested_muts = [rnd]
+                    for compound in tmpl.build_all_member_mutators(
+                        member_type, member_reference
+                    ):
+                        nested_muts.extend(compound.block_items)
+                    out = c_ast.Compound(nested_muts)
+                    return out
             else:
                 if not member_ast.name:
                     # this is the doubly anonymous case, which means we can refer to the nested members as
@@ -780,10 +787,6 @@ class StructureMutatorTemplate(Template):
         if self.decls:
             return self.decls, self.defn
         self.decls = []
-        if not struct_object.typename:
-            # XXX the fact that we're refusing to generate mutators for anonymous types
-            # XXX should probably be made more explicit
-            return [], ""
         self.replace_placeholder_type(struct_object)
         for node in self.get_nodes(self.ast):
             if type(node) == c_ast.FuncDef:
@@ -796,6 +799,7 @@ class StructureMutatorTemplate(Template):
                         print("Warning: failed to generate a mutator definition.")
                         print(node)
                         print(struct_object)
+                        raise Exception()
                     self.decls.append(decl)
                     self.defn = defn
                     break
@@ -817,9 +821,9 @@ class UnionMutatorTemplate(StructureMutatorTemplate):
         # The issue with unions is that we don't actually know which datatype to
         # fuzz. That's not great, but it does mimic the behavior you'll get if an
         # attacker really is able to hand you a union of pointers.
-        mutator_desired_name, mutator_decl_ast = make_mutator_decl_from_arg_type(
-            member_ast.type
-        )
+        mutator_desired_name, _ = make_mutator_decl_from_arg_type(member_ast.type)
+        _, mutator_decl_ast = make_mutator_decl_from_arg_type(
+            copy.deepcopy(member_ast.type), change_name=True)
         mutator_id = c_ast.ID(mutator_decl_ast.name)
         if not member_reference:
             member_reference = self.build_arrow_ref(member_ast.name)
@@ -913,10 +917,6 @@ class UnionMutatorTemplate(StructureMutatorTemplate):
         if self.decls:
             return self.decls, self.defn
         self.decls = []
-        if not union_object.typename and not body_only:
-            # XXX the fact that we're refusing to generate mutators for anonymous types
-            # XXX should probably be made more explicit
-            return [], ""
         self.replace_placeholder_type(union_object)
         for node in self.get_nodes(self.ast):
             if type(node) == c_ast.FuncDef:

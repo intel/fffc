@@ -89,7 +89,7 @@ gcc -o test.gcc test.c
 Would become:
 
 ~~~
-gcc -o test.gcc -g -O0 -fsanitize=address -fno-common -fno-omit-frame-pointer test.c
+gcc -o test.gcc -g -O0 -fsanitize=address -fno-common -fno-omit-frame-pointer -fprofile-arcs test.c
 ~~~
 
 ### 4. Run FFFC

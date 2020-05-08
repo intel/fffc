@@ -316,7 +316,7 @@ int fffc_mutator_for_target_type(short int storage) {
 }
 
 int fffc_mutator_for_target_type(long int storage) {
-	int choice = fffc_pick_one_or_none(25);
+	int choice = fffc_pick_one_or_none(24);
  	if (choice <= 0) {
  		return 0;
  	} else if (choice < 4) {
@@ -327,21 +327,21 @@ int fffc_mutator_for_target_type(long int storage) {
 		*storage ^= fffc_get_random() & 0xFF0000FF;
 	} else if ((choice > 0) && (choice < 16)) {
 		*storage ^= fffc_get_random() & 0x00FFFF00;
-	} else if (choice == 17) {
+	} else if (choice == 16) {
 		*storage += 1;
-	} else if (choice == 18) {
+	} else if (choice == 17) {
 		*storage -= 1;
-	} else if (choice == 19) {
+	} else if (choice == 18) {
 		*storage <<= 1;
-	} else if (choice == 20) {
+	} else if (choice == 19) {
 		*storage = -*storage;
-	} else if (choice == 21) {
+	} else if (choice == 20) {
 		*storage ^= 0xFF;
-	} else if (choice == 22) {
+	} else if (choice == 21) {
 		*storage ^= 0xFF000000;
-	} else if (choice == 23) {
+	} else if (choice == 22) {
 		*storage = fffc_get_long_max();
-	} else if (choice == 24) {
+	} else if (choice == 23) {
 		*storage = fffc_get_long_min();
 	}
 	fffc_log_write(storage, sizeof(long int));
@@ -383,9 +383,9 @@ int fffc_mutator_for_target_type(long long int storage) {
 
 int fffc_mutator_for_target_type(long long unsigned int storage) {
 	int choice = fffc_pick_one_or_none(24);
- 	if (choice <= 0) {
- 		return 0;
- 	} else if (choice < 4) {
+	if (choice <= 0) {
+		return 0;
+	} else if (choice < 4) {
 		*storage ^= fffc_get_random() & 0x000000000000FFFFL;
 	} else if ((choice > 0) && (choice < 8)) {
 		*storage ^= fffc_get_random() & 0xFFFF000000000000L;
@@ -444,7 +444,7 @@ int fffc_mutator_for_target_type(unsigned int storage) {
 }
 
 int fffc_mutator_for_target_type(long unsigned int storage) {
-	int choice = fffc_pick_one_or_none(25);
+	int choice = fffc_pick_one_or_none(24);
  	if (choice <= 0) {
  		return 0;
  	} else if (choice < 4) {
@@ -455,21 +455,21 @@ int fffc_mutator_for_target_type(long unsigned int storage) {
 		*storage ^= fffc_get_random() & 0xFF0000FF;
 	} else if ((choice > 0) && (choice < 16)) {
 		*storage ^= fffc_get_random() & 0x00FFFF00;
-	} else if (choice == 17) {
+	} else if (choice == 16) {
 		*storage += 1;
-	} else if (choice == 18) {
+	} else if (choice == 17) {
 		*storage -= 1;
-	} else if (choice == 19) {
+	} else if (choice == 18) {
 		*storage <<= 1;
-	} else if (choice == 20) {
+	} else if (choice == 19) {
 		*storage = -*storage;
-	} else if (choice == 21) {
+	} else if (choice == 20) {
 		*storage ^= 0xFF;
-	} else if (choice == 22) {
+	} else if (choice == 21) {
 		*storage ^= 0xFF000000;
-	} else if (choice == 23) {
+	} else if (choice == 22) {
 		*storage = fffc_get_long_max();
-	} else if (choice == 24) {
+	} else if (choice == 23) {
 		*storage = 0;
 	}
 	fffc_log_write(storage, sizeof(long unsigned int));
@@ -477,5 +477,122 @@ int fffc_mutator_for_target_type(long unsigned int storage) {
 }
 
 int fffc_mutator_for_target_type(void storage) {
+	return 0;
+}
+
+int fffc_mutator_for_target_type(__int128 storage) {
+	int choice = fffc_pick_one_or_none(40);
+ 	if (choice <= 0) {
+ 		return 0;
+ 	} else if (choice < 4) {
+		*storage ^= fffc_get_random() & 0x000000000000FFFFL;
+	} else if ((choice > 0) && (choice < 8)) {
+		*storage ^= fffc_get_random() & 0xFFFF000000000000L;
+	} else if ((choice > 0) && (choice < 12)) {
+		*storage ^= fffc_get_random() & 0x0000FFFF00000000L;
+	} else if ((choice > 0) && (choice < 16)) {
+		*storage ^= fffc_get_random() & 0x00000000FFFF0000L;
+	} else if ((choice > 0) && (choice < 20)) {
+		__int128 tmp = 0x000000000000FFFFL;
+		tmp ^= fffc_get_random();
+		tmp <<= 64;
+		*storage ^= tmp;
+	} else if ((choice > 0) && (choice < 24)) {
+		__int128 tmp = 0xFFFF000000000000L;
+		tmp ^= fffc_get_random();
+		tmp <<= 64;
+		*storage ^= tmp;
+	} else if ((choice > 0) && (choice < 28)) {
+		__int128 tmp = 0x0000FFFF00000000L;
+		tmp ^= fffc_get_random();
+		tmp <<= 64;
+		*storage ^= tmp;
+	} else if ((choice > 0) && (choice < 32)) {
+		__int128 tmp = 0x00000000FFFF0000L;
+		tmp ^= fffc_get_random();
+		tmp <<= 64;
+		*storage ^= tmp;
+	} else if (choice == 32) {
+		*storage += 1;
+	} else if (choice == 33) {
+		*storage -= 1;
+	} else if (choice == 34) {
+		*storage <<= 1;
+	} else if (choice == 35) {
+		*storage = -*storage;
+	} else if (choice == 36) {
+		*storage ^= 0x00000000000000FFL;
+	} else if (choice == 37) {
+		*storage ^= 0xFF00000000000000L;
+	} else if (choice == 38) {
+		*storage = fffc_get_long_long_max();
+	} else if (choice == 39) {
+		*storage = fffc_get_long_long_min();
+	}
+	fffc_log_write(storage, sizeof(long long int));
+	return 0;
+}
+
+int fffc_mutator_for_target_type(__int128 unsigned storage) {
+	int choice = fffc_pick_one_or_none(40);
+ 	if (choice <= 0) {
+ 		return 0;
+ 	} else if (choice < 4) {
+		*storage ^= fffc_get_random() & 0x000000000000FFFFL;
+	} else if ((choice > 0) && (choice < 8)) {
+		*storage ^= fffc_get_random() & 0xFFFF000000000000L;
+	} else if ((choice > 0) && (choice < 12)) {
+		*storage ^= fffc_get_random() & 0x0000FFFF00000000L;
+	} else if ((choice > 0) && (choice < 16)) {
+		*storage ^= fffc_get_random() & 0x00000000FFFF0000L;
+	} else if ((choice > 0) && (choice < 20)) {
+		__int128 unsigned tmp = 0x000000000000FFFFL;
+		tmp ^= fffc_get_random();
+		tmp <<= 64;
+		*storage ^= tmp;
+	} else if ((choice > 0) && (choice < 24)) {
+		__int128 unsigned tmp = 0xFFFF000000000000L;
+		tmp ^= fffc_get_random();
+		tmp <<= 64;
+		*storage ^= tmp;
+	} else if ((choice > 0) && (choice < 28)) {
+		__int128 unsigned tmp = 0x0000FFFF00000000L;
+		tmp ^= fffc_get_random();
+		tmp <<= 64;
+		*storage ^= tmp;
+	} else if ((choice > 0) && (choice < 32)) {
+		__int128 unsigned tmp = 0x00000000FFFF0000L;
+		tmp ^= fffc_get_random();
+		tmp <<= 64;
+		*storage ^= tmp;
+	} else if (choice == 32) {
+		*storage += 1;
+	} else if (choice == 33) {
+		*storage -= 1;
+	} else if (choice == 34) {
+		*storage <<= 1;
+	} else if (choice == 35) {
+		*storage = -*storage;
+	} else if (choice == 36) {
+		*storage ^= 0x00000000000000FFL;
+	} else if (choice == 37) {
+		*storage ^= 0xFF00000000000000L;
+	} else if (choice == 38) {
+		*storage = fffc_get_long_long_max();
+	} else if (choice == 39) {
+		*storage = 0;
+	}
+	fffc_log_write(storage, sizeof(long long unsigned int));
+	return 0;
+}
+
+int fffc_mutator_for_target_type(_Bool storage) {
+	int choice = fffc_pick_one_or_none(1);
+	if (choice <= 0) {
+		return 0;
+	} else {
+		*storage ^= fffc_get_random();
+	}
+	fffc_log_write(storage, sizeof(_Bool));
 	return 0;
 }
