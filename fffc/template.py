@@ -715,9 +715,9 @@ class StructureMutatorTemplate(Template):
             tmp_name = "tmp_" + str(nesting_context.tmp_count)
             tmp_id = c_ast.ID(tmp_name)
             nesting_context.tmp_count += 1
-            tmp_decl = c_ast.Decl(
+            tmp_decl = copy.deepcopy(c_ast.Decl(
                 tmp_id, None, None, None, member_ast.type, member_reference, None
-            )
+            ))
             change_declname(tmp_decl, tmp_name)
             tmp_addr = self.take_address_of(tmp_id)
             args = c_ast.ExprList(exprs=[tmp_addr])
